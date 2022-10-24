@@ -1,0 +1,488 @@
+--:::::::::::::::::::::::::::::::::::::::::::::Ejercicio 1):::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+/*
+ Resolver las siguientes consultas SQL:
+*/
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+
+--------------------------------------------- Ejercicio 1) a. ----------------------------------------------------------
+/*
+ Mostrar el listado de todos los clientes registrados en el sistema (id, apellido y nombre, tipo y número de documento,
+ fecha de nacimiento) junto con la cantidad de equipos registrados que cada uno dispone, ordenado por apellido y nombre.
+*/
+SELECT p.id_persona, p.apellido, p.nombre, p.tipodoc, p.nrodoc, p.fecha_nacimiento, count(e.id_equipo)
+FROM persona p
+JOIN (SELECT id_cliente FROM cliente) c ON p.id_persona = c.id_cliente                --no puedo obviar esta tabla ya que si no aparecerá el personal también
+LEFT JOIN (SELECT id_cliente, id_equipo FROM equipo) e ON c.id_cliente = e.id_cliente --LEFT para que aparezcan los clientes que no tienen equipo
+GROUP BY p.id_persona
+ORDER BY 2, 3;
+
+
+--------------------------------------------- Ejercicio 1) b. ----------------------------------------------------------
+/*
+ Realizar un ranking (de mayor a menor) de la cantidad de equipos instalados y aún activos, durante los últimos
+ 24 meses, según su distribución geográfica, mostrando: nombre de ciudad, id de la ciudad, nombre del barrio,
+ id del barrio y cantidad de equipos.
+*/
+SELECT c.nombre, c.id_ciudad, b.nombre, b.id_barrio, count(e.id_equipo) "cant. equipos instalados"
+FROM ciudad c
+JOIN barrio b ON c.id_ciudad = b.id_ciudad
+JOIN (SELECT id_barrio, id_persona FROM direccion) d ON b.id_barrio = d.id_barrio
+JOIN (SELECT id_cliente FROM cliente) cte ON d.id_persona = cte.id_cliente
+JOIN (SELECT id_cliente, id_equipo, fecha_baja, fecha_alta FROM equipo) e ON cte.id_cliente = e.id_cliente
+WHERE (e.fecha_alta > current_date - INTERVAL '2 years') AND
+      ((e.fecha_baja IS NULL) OR (e.fecha_baja > current_date))
+GROUP BY 1,2,3,4
+ORDER BY 5 DESC;
+/*
+ 1.b) Suponemos que aunque un cliente se haya dado de baja, si el equipo no se dá de baja aún puede considerarse utilizado.
+ También que podría ser que la fecha de baja se coloque más tarde de la fecha actual, por ejemplo al inicio del siguiente mes.
+*/
+
+--------------------------------------------- Ejercicio 1) c. ----------------------------------------------------------
+/*
+ Visualizar el Top-3 de los lugares donde se ha realizado la mayor cantidad de servicios periódicos durante los
+ últimos 3 años.
+*/
+SELECT c.nombre ciudad, count(s.id_servicio) servicios
+FROM ciudad c
+JOIN (SELECT id_ciudad, id_barrio FROM barrio) b ON c.id_ciudad = b.id_ciudad
+JOIN (SELECT id_barrio, id_persona FROM direccion) d ON b.id_barrio = d.id_barrio
+JOIN (SELECT id_comp, id_tcomp, id_cliente  --al no pasar por persona o cliente no incluimos a los clientes sin direccion
+      FROM comprobante
+      WHERE fecha > current_date - interval '3 year' AND        --el WHERE de este SELECT hace que solo se tomen en cuenta los comprobantes de tipo remito y resuelve la condición de tiempo
+            id_tcomp IN (SELECT id_tcomp FROM tipocomprobante WHERE nombre = 'remito')) comp ON d.id_persona = comp.id_cliente
+JOIN (SELECT id_comp, id_tcomp, id_servicio FROM lineacomprobante) lc ON (comp.id_comp,comp.id_tcomp) = (lc.id_comp, lc.id_tcomp)
+JOIN (SELECT id_servicio FROM servicio WHERE periodico is true) s ON lc.id_servicio = s.id_servicio
+GROUP BY c.id_ciudad
+ORDER BY 2 desc
+LIMIT 3;
+/*
+ 1.c) Concluímos que por lugar se refiere a ciudad y que los servicios periódicos prestados se encuentran en los comprobantes de tipo remito.
+ Como suponemos que puede haber más de un tipo de comprobante que sea remito, usamos el subquery del JOIN a comprobante. Se usará este razonamiento en incisos posteriores
+*/
+
+--------------------------------------------- Ejercicio 1) d. ----------------------------------------------------------
+/*
+ Indicar el nombre, apellido, tipo y número de documento de los clientes que han contratado todos los servicios
+ periódicos cuyo intervalo se encuentra entre 5 y 10.
+*/
+SELECT p.nombre, p.apellido, p.tipodoc, p.nrodoc
+FROM persona p
+WHERE NOT EXISTS (SELECT s.id_servicio      --todos los servicios periódicos
+                  FROM servicio s
+                  WHERE (s.intervalo <= 10 AND s.intervalo >= 5 AND s.periodico is True)
+                  EXCEPT
+                  SELECT lc.id_servicio     --todos los servicios de cada cliente
+                  FROM cliente c
+                  JOIN (SELECT id_cliente, id_comp, id_tcomp FROM comprobante) comp ON c.id_cliente = comp.id_cliente AND comp.id_tcomp IN (SELECT id_tcomp FROM tipocomprobante WHERE nombre = 'remito')
+                  JOIN (SELECT id_comp, id_tcomp, id_servicio FROM lineacomprobante) lc ON (comp.id_comp,comp.id_tcomp) = (lc.id_comp, lc.id_tcomp)
+	              WHERE p.id_persona = c.id_cliente);
+
+/*
+ 1.d) Como en el 1.c) Se considera que los servicios periódicos se encuentran únicamente en los comprobantes de tipo remito.
+*/
+
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--:::::::::::::::::::::::::::::::::::::::::::::Ejercicio 2):::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+/*
+ Para cada una de las restricciones/reglas del negocio en el esquema de datos:
+   - Escribir la restricción de la manera que considere más apropiada en SQL estándar declarativo, indicando su tipo y
+   justificación correspondiente.
+   - Para los 3 últimos controles (c, d, e), implementar la restricción en PostgreSQL de la forma más adecuada, según
+   las posibilidades que ofrece el DBMS.
+*/
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+
+--------------------------------------------- Ejercicio 2) a. ----------------------------------------------------------
+/*
+ Si una persona está inactiva debe tener establecida una fecha de baja, la cual se debe controlar que sea al menos 18
+ años posterior a la de nacimiento.
+*/
+--Tipo: Al necesitar la restricción más de un atributo para definirse, se considera de tipo TUPLA
+ALTER TABLE Persona
+  ADD CONSTRAINT CHECKPersonaMas18
+    CHECK (activo=true OR (fecha_baja is not null AND (fecha_baja - fecha_nacimiento) >= INTERVAL '18 years'));
+
+--------------------------------------------- Ejercicio 2) b. ----------------------------------------------------------
+/*
+ El importe de un comprobante debe coincidir con la suma de los importes de sus líneas (si las tuviera).
+*/
+--Tipo: Al necesitar la restricción más de una tabla para definirse, se considera de tipo ASSERTION
+CREATE ASSERTION importe_comprobante
+  CHECK (NOT EXISTS (SELECT 1
+                    FROM Comprobante c
+                    JOIN LineaComprobante l  ON (c.id_comp,c.id_tcomp) = (l.id_comp,l.id_tcomp)
+                    GROUP BY c.id_comp, c.id_tcomp
+                    HAVING sum(l.importe) != c.importe));
+
+
+--------------------------------------------- Ejercicio 2) c. ----------------------------------------------------------
+/*
+ Un equipo puede tener asignada un IP, y en este caso, la MAC resulta requerida.
+*/
+--Tipo: Al necesitar la restricción más de un atributo para definirse, se considera de tipo TUPLA
+ALTER TABLE Equipo
+  ADD CONSTRAINT CHECKEquipoIp
+    CHECK (ip is null OR mac is not null);
+
+--Al ser una RI de tabla y no usar una query, es adecuado para postgreSQL.
+/*
+ c.d) Se considera que es válido que pueda tener MAC sin IP
+*/
+
+--------------------------------------------- Ejercicio 2) d. ----------------------------------------------------------
+/*
+ Las IPs asignadas a los equipos no pueden ser compartidas entre clientes.
+*/
+--Tipo: Al necesitar la restricción más de una tupla para definirse, se considera de tipo TABLA, no se puede usar una query para el CHECK de postgreSQL, asique se utiliza un TRIGGER
+ALTER TABLE Equipo
+  ADD CONSTRAINT chk_ip_cliente
+    CHECK (NOT EXISTS (SELECT 1
+                       FROM equipo
+  			 	       WHERE ip is not null
+                       GROUP BY ip
+                       HAVING count(DISTINCT id_cliente) > 1));
+/*
+  Implementación para postgreSQL
+  EQUIPO
+  -UPDATE? si (id_cliente, ip)
+  -DELETE? no
+  -INSERT? si
+*/
+CREATE OR REPLACE FUNCTION FN_CHECKIpCompartida() RETURNS TRIGGER AS $$
+BEGIN
+  IF (EXISTS (SELECT 1
+                FROM equipo e
+    	  	    WHERE e.ip = new.ip AND e.id_cliente != new.id_cliente)) THEN
+      raise exception 'No se puede tener ip compartida';
+  END IF;
+  RETURN new;
+END$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER TG_ipCompartida
+AFTER INSERT OR UPDATE OF ip, id_cliente
+ON equipo
+FOR EACH ROW
+EXECUTE PROCEDURE FN_CHECKIpCompartida();
+
+--------------------------------------------- Ejercicio 2) e. ----------------------------------------------------------
+/*
+ No se pueden instalar más de 25 equipos por Barrio.
+*/
+--Tipo: Al necesitar la restricción más de una tabla para definirse, se considera de tipo ASSERTION. No está implementado assertion en postgreSQL, asique se utiliza un TRIGGER
+CREATE ASSERTION Equipos_por_barrio
+  CHECK (NOT EXISTS (SELECT 1
+                     FROM direccion d
+                     JOIN persona p ON d.id_persona = p.id_persona
+                     JOIN cliente cte ON p.id_persona = cte.id_cliente
+                     JOIN equipo e ON cte.id_cliente = e.id_cliente
+                     GROUP BY d.id_barrio
+                     HAVING  count(e.id_equipo) > 25));
+/*
+  Implementación para postgreSQL
+  EQUIPO
+  -UPDATE? si (id_cliente)
+  -DELETE? no
+  -INSERT? si
+  DIRECCION
+  -UPDATE? si (id_barrio,id_persona)
+  -DELETE? no
+  -INSERT? si
+*/
+CREATE OR REPLACE FUNCTION FN_cant_equipos25() RETURNS TRIGGER AS $$
+DECLARE
+    tpl record;
+BEGIN
+  IF (TG_TABLE_NAME = 'direccion') THEN  --si se modifica el id_barrio, id_persona, ambos o se hace una inserción en la tabla dirección, se revisa que el barrio siga teniendo menos de 25 equipos.
+    IF (25 < (SELECT count(DISTINCT e.id_equipo)
+              FROM (SELECT id_persona FROM direccion WHERE id_barrio = new.id_barrio) d
+              JOIN (SELECT id_cliente, id_equipo FROM equipo) e ON d.id_persona = e.id_cliente)) THEN
+      raise exception 'No se puede hacer el update ya que genera que se exceda el límite de 25 equipos por barrio';
+    END IF;
+  elseIF (TG_TABLE_NAME = 'equipo') THEN --si se modifica el cliente del equipo o se agrega un nuevo equipo, se revisa si el/los barrios de ese nuevo cliente ahora pasa los 25 equipos.
+    FOR tpl in (SELECT id_barrio FROM direccion WHERE id_persona = new.id_cliente) LOOP
+      IF (25 < (SELECT count(DISTINCT e.id_equipo)
+                FROM (SELECT d.id_persona FROM direccion d WHERE d.id_barrio = tpl.id_barrio) d
+                JOIN (SELECT id_cliente, id_equipo FROM equipo) e ON d.id_persona = e.id_cliente)) THEN
+        raise exception 'No se puede continuar ya que genera que se exceda el límite de 25 equipos por barrio';
+      END IF;
+    END LOOP;
+  END IF;
+  RETURN new;
+END$$ language 'plpgsql';
+
+CREATE TRIGGER TG_cant_equipos25eq
+AFTER INSERT OR UPDATE OF id_cliente
+ON equipo
+FOR EACH ROW
+EXECUTE FUNCTION FN_cant_equipos25();
+
+CREATE TRIGGER TG_cant_equipos25dir
+AFTER INSERT OR UPDATE OF id_barrio, id_persona
+ON direccion
+FOR EACH ROW
+EXECUTE FUNCTION FN_cant_equipos25();
+
+/*
+ 2.e) Suponemos que los clientes sin dirección no son tomados en cuenta para la restricción ya que no se sabe si pertenecen al mismo barrio.
+ También tomamos que, ya que el esquema lo permite, si un cliente tiene 2 o más direcciones, al agregar o modificar el id_cliente de un equipo,
+ se deberá revisar que ninguno de los barrios de las distintas direcciones supere los 25 equipos.
+*/
+
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--:::::::::::::::::::::::::::::::::::::::::::::Ejercicio 3):::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+/*
+ Escribir la sentencia SQL para crear las vistas detalladas a continuación. Indicar y justificar si es actualizable o no
+ en PostgreSQL, indicando la/s causa/s (Importante: siempre que sea posible, se deberán generar vistas automáticamente
+ actualizables para PostgreSQL).
+  - Para la/s vista/s actualizable/s, provea una sentencia que provoque diferente comportamiento según la vista tenga o
+    no especificada la opción With Check Option, y analice dichos comportamientos.
+  - Para una de la/s vista/s no actualizable/s, implemente los triggers instead of necesarios para su actualización.
+    Plantee una sentencia que provoque su activación y explique la propagación de dicha actualización.
+*/
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--------------------------------------------- Ejercicio 3) a. ----------------------------------------------------------
+/*
+ Realice una vista que contenga el saldo de cada uno de los clientes que tengan domicilio en la ciudad ‘X’.
+*/
+--La siguiente sentencia es automáticamente actualizable en PostgreSQL ya que muestra únicamente elementos de una tabla (Esto permite que haya
+--una forma de hacerla actualizable, sin embargo si se usan ensambles, distinct, funciones de agregación, campos calculados,
+--tampoco podría haber sido actualizable) e incluye todos los elementos no nulos de esta. Por lo que se podría modificar, insertar
+--o eliminar como a la tabla que se le hace referencia.
+CREATE OR REPLACE VIEW saldoClientes AS
+SELECT id_cliente, saldo
+FROM cliente
+WHERE id_cliente IN (
+    SELECT id_persona
+    FROM direccion
+    WHERE id_barrio IN (
+        SELECT id_barrio
+        FROM barrio
+        WHERE id_ciudad IN (
+            SELECT id_ciudad
+            FROM ciudad
+            WHERE nombre = 'X')));
+--EJEMPLO!
+--Tabla DIRECCION (id_persona, id_barrio, ...) contiene (100,200,...) (101,201,...)
+--Tabla BARRIO (id_barrio, id_ciudad, ...) contiene (200,300,...) (201,301,...)
+--Tabla CIUDAD (id_ciudad, nombre) contiene (300,'X') (301,'Y')
+
+--SIN CHECK OPTION
+INSERT INTO saldoClientes (id_cliente, saldo) VALUES (100, 5000);
+  --Sin importar los valores, siempre y cuando no vaya en contra de alguna restricción se inserta normalmente,
+  --ya que la vista no checkea que sea parte de la consulta. En este caso el cliente tiene un domicilio en la ciudad 'X'
+  --por lo tanto se incluira en la tabla cliente y en la vista saldoCliente
+INSERT INTO saldoClientes (id_cliente, saldo) VALUES (101, 5000);
+  --En este caso se incluiría en la tabla cliente pero no en la vista ya que no tiene domicilio en la ciudad 'X'
+DELETE FROM saldoClientes WHERE id_cliente = 101;
+  --No podría eliminarse ya que no es visible en la vista saldoClientes. En el caso de que el cliente fuese 100 si.
+UPDATE saldoClientes SET saldo = 1000 WHERE id_cliente = 100;
+  --Se podría actualizar por las mismas razones que se mencionan en el caso de eliminar.
+
+--CON CHECK OPTION
+INSERT INTO saldoClientes (id_cliente, saldo) VALUES (100, 5000);
+  --En este caso se insertará porque aparecería en la vista
+INSERT INTO saldoClientes (id_cliente, saldo) VALUES (101, 5000);
+  --En este caso el check no le permitiría insertar la tupla ya que no tiene domicilio en la ciudad 'X', tampoco en la
+  --tabla cliente.
+DELETE FROM saldoClientes WHERE id_cliente = 101;
+  --Funciona igual que en el caso de no tener check option
+UPDATE saldoClientes SET saldo = 1000 WHERE id_cliente = 100;
+  --Funciona igual que en el caso de no tener check option
+
+
+--------------------------------------------- Ejercicio 3) b. ----------------------------------------------------------
+/*
+ Realice una vista con la lista de servicios activos que posee cada cliente junto con el costo del mismo al momento de consultar la vista.
+*/
+/*La siguiente sentencia NO es actualizable en PostgreSQL ya que necesita mostrar elementos de dos tablas. Por lo que para que sea
+  actualizable se le debería implementar trigger instead of para incluir un funcionamiento de las sentencias insert, UPDATE o delete.
+  Además no posee todos los atributos necesarios para una inserción en las tablas que utiliza por lo que habria que incluirlos en
+  la vista para hacerla actualizable en caso de insert.*/
+CREATE OR REPLACE VIEW serviciosPorCliente AS
+SELECT DISTINCT s.id_servicio, s.costo, e.id_cliente
+FROM servicio s
+JOIN (SELECT id_cliente, id_servicio FROM equipo) e ON s.id_servicio = e.id_servicio
+WHERE s.activo is True
+ORDER BY id_cliente;
+
+--VISTA REFORMULADA PARA EL TRIGGER
+CREATE OR REPLACE VIEW serviciosPorClienteTG AS
+SELECT DISTINCT s.id_servicio, s.nombre, s.periodico, s.id_cat, s.costo, e.id_cliente
+FROM servicio s
+JOIN (SELECT id_cliente, id_servicio FROM equipo) e ON s.id_servicio = e.id_servicio
+WHERE s.activo is True
+ORDER BY id_cliente;
+
+CREATE OR REPLACE FUNCTION FN_ServiciosPorCliente() RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        DELETE FROM equipo WHERE id_cliente = old.id_cliente;
+        DELETE FROM servicio WHERE id_servicio = old.id_servicio;
+        RETURN old;
+    ELSEIF (TG_OP = 'INSERT') THEN
+        INSERT INTO servicio (id_servicio, nombre, periodico, costo, activo, id_cat)
+            VALUES (new.id_servicio, new.nombre, new.periodico, new.costo, true, new.id_cat);
+        INSERT INTO equipo (id_equipo, nombre, id_servicio, id_cliente, fecha_alta, tipo_conexion, tipo_asignacion)
+            VALUES ((SELECT MAX(id_equipo)+1 FROM equipo), 'equipo default', new.id_servicio, new.id_cliente, current_timestamp, 'PPTP', 'DHCP');
+        RETURN new;
+    ELSEIF (TG_OP = 'UPDATE') THEN
+        UPDATE servicio SET id_servicio = new.id_servicio, nombre = new.nombre, periodico = new.periodico, costo = new.costo,id_cat = new.id_cat WHERE id_servicio = old.id_servicio;
+        UPDATE equipo SET id_servicio = new.id_servicio WHERE id_cliente = old.id_cliente AND id_servicio = old.id_servicio;
+        RETURN new;
+    END IF;
+END$$ LANGUAGE 'plpgsql';
+
+CREATE TRIGGER TG_ServiciosPorCliente
+INSTEAD OF INSERT OR UPDATE OR DELETE
+ON serviciosPorClienteTG
+FOR EACH ROW
+EXECUTE FUNCTION FN_ServiciosPorCliente();
+
+--SENTENCIA QUE ACTIVA EL TRIGGER
+INSERT INTO serviciosPorClienteTG (id_servicio, nombre, periodico, id_cat, costo, id_cliente) VALUES (511,'servicioX',true,501,200,1001);
+/*Suponiendo que existe la categoria y el cliente, esta sentencia llama al trigger que ejecuta la función FN_ServiciosPorCliente la
+  cual nota que la operación es un insert y crea el servicio con los datos del insert, sin contar con los valores que pueden ser null
+  (agregarlos dependería solo de si se considera necesario) y se lo pone al servicio como activo. Luego se crea el equipo utilizando
+  uno por defecto, con los datos importantes del insert.*/
+
+/*
+ 3.b) Suponemos que por servicios activos se refiere a los servicios referentes a los equipos. Suponemos que a la hora de insertar una tupla a la
+ vista, se utiliza un equipo por default para el nuevo servicio. Aunque no se implementó el trigger instead of como si la vista tuviera with check option
+ funciona de esa manera ya que no se le da la posibilidad de insertar una tupla que no aparezca en la vista.
+*/
+
+--------------------------------------------- Ejercicio 3) c. ----------------------------------------------------------
+/*
+ Realice una vista que contenga, por cada uno de los servicios periódicos registrados, el monto facturado mensualmente durante los últimos 5 años ordenado por servicio, año, mes y monto.
+*/
+/*La siguiente sentencia NO es actualizable en PostgreSQL ya que necesita mostrar elementos de dos tablas. Ademas utiliza fragmentos
+  de atributos y la función suma, por lo que para este caso no tendría mucho sentido buscar que sea automaticamente actualizable.*/
+CREATE OR REPLACE VIEW ServiciosMontoMensual AS
+SELECT s.id_servicio, extract(year FROM c.fecha) Año, extract(month FROM c.fecha) Mes, sum(lc.importe) Monto
+FROM servicio s
+  JOIN (SELECT id_servicio, id_comp, id_tcomp, importe FROM lineacomprobante) lc ON s.id_servicio = lc.id_servicio
+  JOIN (SELECT id_comp, id_tcomp, fecha FROM comprobante WHERE id_tcomp IN (SELECT id_tcomp FROM tipocomprobante WHERE nombre = 'factura')) c ON (c.id_comp,c.id_tcomp) = (lc.id_comp,lc.id_tcomp)
+WHERE s.periodico = true AND  c.fecha > current_date - INTERVAL '5 years'
+GROUP BY 1,2,3
+ORDER BY 1,2,3,4;
+
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--:::::::::::::::::::::::::::::::::::::::::::::Ejercicio 4):::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--                         SERVICIOS (utilizando Vistas, Procedimientos y/o Funciones)
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--------------------------------------------- Ejercicio 4) a. ----------------------------------------------------------
+/*
+ Proveer el mecanismo que crea más adecuado para que al ser invocado (una vez por mes), tome todos los servicios que
+ son periódicos y genere la/s factura/s correspondiente/s. Indicar si se deben proveer parámetros adicionales para su
+ generación. Explicar además cómo resolvería el tema de la invocación mensual (pero no lo implemente).
+*/
+CREATE OR REPLACE VIEW ServiciosPeriodicosClientesActivos as --esta vista muestra todos los servicios periodicos presentes tanto en los comprobantes como en los equipos
+SELECT scl.id_persona, s.id_servicio, s.costo
+FROM servicio s
+    JOIN (  SELECT ca.id_persona, cs.id_servicio --Este SELECT devuelve la union de todos los servicios en los comprobantes de tipo remito, y los servicios en los equipos
+            FROM (  SELECT id_persona FROM persona
+                    WHERE tipo = 'cliente' AND fecha_baja is null) ca
+                JOIN (  SELECT c.id_cliente, lc.id_servicio --servicios de cada cliente registrados en las lineas de los comprobantes no vencidos.
+                        FROM comprobante c
+                            JOIN lineacomprobante lc ON (c.id_comp,c.id_tcomp) = (lc.id_comp,lc.id_tcomp)
+                        WHERE c.id_tcomp IN (SELECT id_tcomp FROM tipocomprobante WHERE nombre = 'remito') AND
+                              (c.fecha_vencimiento < current_timestamp OR c.fecha_vencimiento is null) AND
+                              (extract(year from c.fecha) <= extract(year from current_timestamp)) AND (extract(month from c.fecha) < extract(month from current_timestamp)) --con esta linea se corrobora que los servicios tomados en cuenta sean los del mes pasado para atras.
+                        UNION ALL
+                        SELECT id_cliente, id_servicio --servicios utilizados de los equipos que no están dados de baja
+                        FROM equipo
+                        WHERE fecha_baja > current_timestamp OR fecha_baja is null ) cs ON ca.id_persona = cs.id_cliente) scl ON s.id_servicio = scl.id_servicio
+WHERE periodico is true AND activo is true
+ORDER BY 1,2;
+
+SELECT * FROM ServiciosPeriodicosClientesActivos;
+
+CREATE OR REPLACE FUNCTION generacion_facturas() RETURNS VOID AS $$
+DECLARE
+    t record;
+    idTcomp integer := 61; --Se debe colocar aquí el valor de id_tcomp para el tipo factura
+    idComp integer := coalesce((SELECT max(id_comp) FROM comprobante WHERE id_tcomp = idTcomp),0); --valor mayor de los id_comp de tipo factura
+    id_clienteActual integer := -1;
+    servicioActual integer := -1;
+    linea integer;
+
+BEGIN
+    FOR t IN SELECT * FROM ServiciosPeriodicosClientesActivos LOOP
+        IF(t.id_persona != id_clienteActual) THEN --crea un nuevo comprobante si cambia el id_cliente entre una tupla y la siguiente, esto gracias a ordenar la vista por cliente
+            id_clienteActual := t.id_persona;
+            idComp := idComp + 1;
+            INSERT INTO comprobante (id_comp, id_tcomp,fecha,comentario,importe,id_cliente) VALUES (idComp,idTcomp, current_timestamp, '', 0, id_clienteActual);
+            linea := 1;
+        END IF;
+        IF(t.id_servicio != servicioActual or t.id_persona != id_clienteActual) THEN --crea una nueva linea si cambia el servicio o el cliente entre una tupla y la siguiente, esto gracias a ordenar la vista por servicio también
+            INSERT INTO lineacomprobante(nro_linea, id_comp, id_tcomp, descripcion, cantidad, importe, id_servicio) VALUES (linea, idComp, idTcomp, ' ', 1, t.costo, t.id_servicio);
+            servicioActual := t.id_servicio;
+            linea := linea + 1;
+        ELSE -- si no la ultima linea de comprobante se aumentara su cantidad en 1 ya que se contrataron dos veces el mismo servicio.
+            UPDATE lineacomprobante SET cantidad = (cantidad + 1), importe = (importe + t.costo) WHERE (id_comp, id_tcomp, nro_linea) = (idComp,idTcomp,linea-1);
+        END IF;
+        UPDATE comprobante SET importe = (importe + t.costo) WHERE (id_comp, id_tcomp) = (idComp,idTcomp);
+
+    END LOOP;
+END$$ LANGUAGE 'plpgsql';
+
+SELECT generacion_facturas(); --genera las facturas, se ejecuta una vez al mes
+
+/*Para implementar que se pueda llamar a la función una única vez en el mes, pensamos en agregar en la función una condición de que si existían
+  comprobantes de tipo factura (suponiendo que solo se generan de esta manera o son un tipo especial de factura), con fecha del mes actual, no
+  se permitiría generar la facturación.*/
+
+/*
+ 4.a) Se tuvieron varias consideraciones en este inciso, entre ellas:
+ - A pesar de que en incisos anteriores se tomó que los servicios periódicos solo estaban registrados en los comprobantes de tipo factura,
+ fué después de hacer la vista de este inciso con los servicios tanto de los comprobantes como de los equipos, pero ya que esta solución tiene una
+ complejidad mayor decidimos dejarla.
+ - Se tuvo en cuenta que si el servicio estaba inactivo, el cliente se había dado de baja, el equipo se había dado de baja, el comprobante
+ había vencido, o era del mes actual (la facturación se hace a principio de mes tomando remitos del mes anterior), no debía incluirse en la facturación.
+*/
+
+--------------------------------------------- Ejercicio 4) b. ----------------------------------------------------------
+/*
+ Proveer el mecanismo que crea más adecuado para que al ser invocado retorne el inventario consolidado de los equipos
+ actualmente utilizados. Se necesita un listado que por lo menos tenga: el nombre del equipo, el tipo, cantidad y si
+ lo considera necesario puede agregar más datos.
+*/
+CREATE OR REPLACE VIEW inventarioEquipos as
+SELECT e.nombre, e.tipo_asignacion, e.tipo_conexion, count(e.*) cantidad
+FROM equipo e
+    JOIN (select id_persona, fecha_baja from persona) p ON e.id_cliente = p.id_persona
+WHERE (e.fecha_baja > current_timestamp OR e.fecha_baja is null) AND (p.fecha_baja > current_timestamp OR p.fecha_baja is null)
+GROUP BY 1,2,3;
+
+SELECT * FROM inventarioEquipos;
+
+/*
+ 4.b) En este inciso consideramos que aún si el equipo no se ha dado de baja, si se da de baja el cliente, entonces el
+ equipo no se considera actualmente utilizado.
+*/
+
+--------------------------------------------- Ejercicio 4) c. ----------------------------------------------------------
+/*
+ Proveer el mecanismo que crea más adecuado para que al ser invocado entre dos fechas cualesquiera dé un informe de los
+ empleados junto con la cantidad de turnos resueltos por localidad y los tiempos promedio y máximo del conjunto de cada uno.
+*/
+CREATE OR REPLACE FUNCTION informeEmpleados(fecha_inicial timestamp, fecha_final timestamp) RETURNS TABLE(empleado integer, localidad varchar, "Turnos resueltos" bigint, "tiempo promedio" double precision, "tiempo maximo" double precision) AS $$
+BEGIN
+    RETURN QUERY
+        (SELECT p.id_personal, c.nombre, count(t.id_turno), avg(extract(epoch from (t.hasta - t.desde))/3600), max(extract(epoch from (t.hasta - t.desde))/3600)
+        FROM ciudad c
+        JOIN (select id_ciudad, id_barrio from barrio) b ON c.id_ciudad = b.id_ciudad
+        JOIN (select id_barrio, id_persona from direccion) d ON b.id_barrio = d.id_barrio
+        JOIN (select id_cliente, id_turno from comprobante) cb ON d.id_persona = cb.id_cliente
+        JOIN (select id_turno, id_personal, desde, hasta from turno) t ON cb.id_turno = t.id_turno
+        JOIN personal p ON t.id_personal = p.id_personal
+        JOIN rol ON p.id_rol = rol.id_rol
+        WHERE rol.nombre = 'empleado' AND desde > fecha_inicial AND hasta < fecha_final                    --hasta < fecha_final hace que si "hasta" es null, no lo incluya en la selección
+        GROUP BY 1,2);
+END$$ LANGUAGE 'plpgsql';
+
+SELECT * FROM informeEmpleados(timestamp '2016-10-19 09:00:00', timestamp '2017-10-19 9:00:00');
+
+--::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
+--::::::::::::::::::::::::::::::::::::::::::::::::::FIN:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::--
